@@ -3,7 +3,6 @@ import { pinecone } from 'utils/pinecone-client.js';
 import { PINECONE_INDEX_NAME, WORKING_DIR } from 'config/serverSettings.js';
 import { DocVectorStore } from 'utils/docVectorStore.js';
 import { PuppeteerWebBaseLoader } from "langchain/document_loaders"
-import { Document } from 'langchain/document';
 import { htmlToText, HtmlToTextOptions } from 'html-to-text';
 import fs from 'fs';
 import { Browser, Page } from 'puppeteer';
@@ -13,38 +12,24 @@ const INGEST_VECTORDB_NAMESPACE = ''; // when '' VECTORDB is not touched
 
 /* URL's you want to retrieve text from */
 let urls = [
-  // 'https://loftsoft.ch/',
-  // 'https://loftsoft.ch/wieso-wir',
-  // 'https://loftsoft.ch/was-wir-bieten',
-  // 'https://loftsoft.ch/uuebkit',
-  // 'https://loftsoft.ch/ueber-uns',
-  // 'https://loftsoft.ch/kontakt',
-  'https://loftsoft.ch/referenzen',
-  'https://loftsoft.ch/referenzen/se-minimelweb/details',
-  'https://loftsoft.ch/referenzen/eda-pmtn/details',
-  'https://loftsoft.ch/referenzen/metbar-event-planung/details',
-  'https://loftsoft.ch/referenzen/securitas-klswebapp/details',
-  'https://loftsoft.ch/referenzen/swisscom-mspp/details',
-  'https://loftsoft.ch/referenzen/ktzh-leunetservicesportal/details',
-  'https://loftsoft.ch/referenzen/swisscom-mcccustomerportal/details',
-  'https://loftsoft.ch/referenzen/srk-personendb/details',
-  'https://loftsoft.ch/referenzen/amag-wis/details',
-  'https://loftsoft.ch/referenzen/holliger-palettenportal/details',
-  'https://loftsoft.ch/referenzen/securitas-kls/details',
-  'https://loftsoft.ch/referenzen/pfisteroptik-optilink/details',
+  'https://company.ch/referenzen/customer1/details',
+  'https://company.ch/referenzen/customer2/details',
+  'https://company.ch/referenzen/customer3/details',
 ];
 
-
 // urls = [
-//   'https://loftsoft.ch/referenzen',
-//   'https://loftsoft.ch/referenzen/se-minimelweb/details'
+// //  'https://company.ch/referenzen',
+//   'https://company.ch/referenzen/customer1/details'
 // ]
+
+const referenzenListe = `${WORKING_DIR}/company-ch-Referenzenliste.txt`;
+
 
 export const run = async () => {
   try {
 
     const vectorStore = new DocVectorStore(pinecone.Index(PINECONE_INDEX_NAME));
-
+    let detailCount = 0;
     for(let i = 0; i < urls.length; i++) {
       
       console.log(urls[i]);
@@ -73,23 +58,46 @@ export const run = async () => {
       const rawDocs = await loader.load();
 
       const name = urls[i].replace('https://', '').replace(/[./]/g, '-');
-    
+
       for (let doc of rawDocs) {
         let html = doc.pageContent;
         fs.writeFileSync(`${WORKING_DIR}/${name}.html`, html, 'utf8');
 
         let text = ''
         
-        if (name == 'loftsoft-ch-referenzen') {
-          text = htmlToText(html, referenzenOptions);
+        if (name == 'company-ch-referenzen') {
+          text = htmlToText(html, referenzListeConverterOptions);
           text = text.replace(/(.+)-Marker-(\r\n|\n|\r)(\r\n|\n|\r)(.+)(\r\n|\n|\r)(.+)(\r\n|\n|\r)/g, '$1, $4, $6');
-          text = text.replace(/^(.+)(\r\n|\n|\r)/g, 'REFERENZ LISTE von Loftsoft IT\n\nDie folgende Liste enthält eine Auswahl von Projekten die Loftsoft IT für ihre Kunden umgesetzt hat,\nmit Projektbezeichnung, Kundenbezeichnung und den Betriebsjahren.\n\n$1');
+          text = text.replace(/^(.+)(\r\n|\n|\r)/g, 'Referenzliste mit einer Auswahl an Projekten die Company für ihre Kunden verwirklicht hat.\n\nPROJEKTNAME, KUNDE, BETRIEB\n\n$1');
 
-        } else if (name.includes('loftsoft-ch-referenzen-')) {
-          text = htmlToText(html, referenzenDetailsOptions);
+        } else if (name.includes('company-ch-referenzen-')) {
+        
+          if (detailCount==0) {
+            fs.writeFileSync(referenzenListe, 'Referenzliste mit einer Auswahl an Projekten die Company für ihre Kunden verwirklicht hat.\n\nPROJEKTNAME, KUNDE, BETRIEB\n\n', 'utf8');
+          }
+
+          detailCount++;
+
+          console.log(detailCount);
+          const metaData: detailMetaData = { id: detailCount }; 
+          text = htmlToText(html, referenzDetailConverterOptions, metaData);
           text = text.replaceAll(/\s\|\s/g, '');    // remove ' | ' nach der Jahreszahl
-          text = text.replaceAll('UNSER KUNDE SAGT', 'KUNDENZITAT');
-          text = text.replace(/^(.+)(\r\n|\n|\r)+(.+)/g, 'DETAILS zum PROJEKT - $3');
+          text = text.replaceAll('UNSER KUNDE SAGT', 'Was unser Kunde zu Company in diesem Projekt sagt:');
+          
+          const matches = text.match(/^(.+)(\r\n|\n|\r)+(.+)(\r\n|\n|\r)/) || [];        // Zeitraum und Projektname auslesen
+          if (matches.length == 5) {
+            metaData.timeRange = matches[1];
+            metaData.project = matches[3];
+          }                
+          //                Zeitraum      Newline  Projekt Newline  Ganzer Rest
+          //                     $1|         $2|  $3|          $4| $5|
+          text = text.replace(/^(.+)(\r\n|\n|\r)+(.+)(\r\n|\n|\r)+(.+)/g, `Details zum ${detailCount}. Projekt aus der Referenzliste\nKunde: ${metaData.customer}\nProjektname: $3\nThema: $5`);
+
+          fs.appendFileSync(referenzenListe, `${metaData.project}, ${metaData.customer}, ${metaData.timeRange}\n\n` ,'utf8');
+
+
+
+
         } else {
           text = htmlToText(html);
         }
@@ -118,15 +126,17 @@ export const run = async () => {
 };
 
 
-const referenzenDetailsOptions: HtmlToTextOptions = { 
+const referenzDetailConverterOptions: HtmlToTextOptions = { 
   formatters: {
-    'extractCustomer': function (elem, walk, builder, options) {
+    'extractCustomer': function (elem, walk, builder, options) {      
       builder.openBlock();
       walk(elem.children, builder);
       let text = elem.attribs['alt'] || '' as string;
       const find = 'Kunden Logo: ';
       const idx = text.lastIndexOf(find);
-      builder.addInline(idx > 0 ? text.substring(idx + find.length): '');
+      const customer = idx > 0 ? text.substring(idx + find.length): '';
+      ((builder as any)['metadata'] as detailMetaData).customer = customer;
+      builder.addInline(customer);
       builder.closeBlock();
     }
   },        
@@ -141,7 +151,7 @@ const referenzenDetailsOptions: HtmlToTextOptions = {
   ]
 };
 
-const referenzenOptions: HtmlToTextOptions = { 
+const referenzListeConverterOptions: HtmlToTextOptions = { 
   formatters: {
     'extractBegin': function (elem, walk, builder, options) {
       builder.openBlock();
@@ -158,3 +168,10 @@ const referenzenOptions: HtmlToTextOptions = {
     { selector: 'div > h3.mt-5', format: 'extractBegin' }
   ]
 };
+
+type detailMetaData = {
+  id?: number;
+  customer?: string;
+  project?: string;
+  timeRange?: string;
+}
